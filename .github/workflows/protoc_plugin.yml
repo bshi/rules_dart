@@ -1,0 +1,72 @@
+name: Standalone Protoc Plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugintag:
+        # NB: it would make more sense for the upstream repository to own these artifacts
+        # but the use-case for publishing standalone binaries is likely mostly limited to
+        # Bazel integration.
+        description: google/protobuf.dart release tag
+        required: true
+        type: string
+        default: 'refs/tags/protobuf-v2.0.1'
+      tag:
+        # A tag for the rules_dart repository is required to create a Github Release.
+        description: rules_dart associated tag
+        required: true
+        type: string
+        default: 'refs/tags/2.17.0'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        config:
+          - { os: ubuntu-latest, architecture: x64, name: linux-x86_64 }
+          - { os: macos-11, architecture: x64, name: darwin-10.15-x86_64 }
+
+    runs-on: ${{ matrix.config.os }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          repository: google/protobuf.dart
+          ref: ${{ github.event.inputs.plugintag }}
+
+      - name: Setup Dart SDK
+        uses: dart-lang/setup-dart@v1.3
+        with:
+          architecture: ${{ matrix.config.architecture }}
+
+      - name: Build
+        run: |
+          cd protoc_plugin
+          dart pub get
+          dart compile exe bin/protoc_plugin.dart
+          VERSION=$( echo "${{ github.event.inputs.plugintag }}" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' )
+          TARGET=protoc_plugin-${VERSION}.${{ matrix.config.name }}
+          mv bin/protoc_plugin.exe "${TARGET}"
+          file "${TARGET}"
+          openssl dgst -sha256 -r "${TARGET}" > "${TARGET}.sha256"
+          cat "${TARGET}.sha256"
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: plugins-${{ matrix.config.os }}
+          path: protoc_plugin/protoc_plugin-*.${{ matrix.config.name }}*
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download all workflow run artifacts
+        uses: actions/download-artifact@v3
+      - name: Display structure of downloaded files
+        run: ls -R
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: protoc_plugin ${{ github.event.inputs.plugintag }}
+          tag_name: ${{ github.event.inputs.tag }}
+          files: |
+            */protoc_plugin*.${{ matrix.config.name }}*
